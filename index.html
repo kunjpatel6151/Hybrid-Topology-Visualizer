@@ -11,7 +11,14 @@
         body { background: #f5f7fb; }
         header { background: #0d6efd; color: #fff; }
         .toolbar button { width: 100%; }
-        .workspace-wrapper { position: relative; height: calc(100vh - 190px); background: #fff; border: 1px solid #e5e7eb; border-radius: .5rem; overflow: hidden; }
+        .workspace-wrapper { 
+            position: relative; 
+            height: calc(100vh - 120px);  /* Increased height */
+            background: #fff; 
+            border: 1px solid #e5e7eb; 
+            border-radius: .5rem; 
+            overflow: hidden; 
+        }
         #workspace { position: absolute; inset: 0; }
         #wires { position: absolute; inset: 0; pointer-events: none; }
         .wire { stroke: #2b7ce9; stroke-width: 3; pointer-events: auto; }
@@ -23,7 +30,23 @@
         .label { font-size: .8rem; font-weight: 600; color: #334155; }
         .status { min-height: 24px; }
         .panel { background: #fff; border: 1px solid #e5e7eb; border-radius: .5rem; padding: 1rem; }
-        .scroll { overflow: auto; max-height: calc(100vh - 260px); }
+        .scroll { overflow: auto; max-height: calc(100vh - 220px); } /* Adjusted for new workspace size */
+        
+        /* Custom scrollbar for the log panel */
+        .scroll::-webkit-scrollbar {
+            width: 8px;
+        }
+        .scroll::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        .scroll::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+        .scroll::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
     </style>
 </head>
 <body>
@@ -52,10 +75,16 @@
                     <hr>
                     <h6 class="mb-2">Connections</h6>
                     <div class="row g-2 toolbar">
-                        <div class="col-6"><button class="btn btn-success" id="connectMode"><i class="bi bi-link-45deg"></i> Connect</button></div>
-                        <div class="col-6"><button class="btn btn-warning" id="disconnectMode"><i class="bi bi-scissors"></i> Remove Link</button></div>
-                        <div class="col-12"><button class="btn btn-outline-danger" id="deleteDevice"><i class="bi bi-x-circle"></i> Remove Device</button></div>
+                        <div class="col-12"><button class="btn btn-success" id="connectMode"><i class="bi bi-link-45deg"></i> Connect</button></div>
                     </div>
+                    <hr>
+                    <h6 class="mb-2">Select Component</h6>
+                    <div class="mb-3">
+                        <select class="form-select" id="componentSelect">
+                            <option value="">-- Select a component --</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-outline-danger w-100 mt-2" id="deleteSelectedComponent"><i class="bi bi-x-circle"></i> Delete Selected Component</button>
                 </div>
 
                 <div class="panel mb-3">
@@ -96,6 +125,8 @@
         const wires = document.getElementById('wires');
         const statusEl = document.getElementById('status');
         const logEl = document.getElementById('log');
+        const componentSelect = document.getElementById('componentSelect');
+        const deleteSelectedComponentBtn = document.getElementById('deleteSelectedComponent');
 
         const senderSel = document.getElementById('sender');
         const receiverSel = document.getElementById('receiver');
@@ -104,8 +135,6 @@
         const addSwitchBtn = document.getElementById('addSwitch');
         const addPCBtn = document.getElementById('addPC');
         const connectBtn = document.getElementById('connectMode');
-        const disconnectBtn = document.getElementById('disconnectMode');
-        const deleteDeviceBtn = document.getElementById('deleteDevice');
         const sendBtn = document.getElementById('sendBtn');
         const clearBtn = document.getElementById('btnClear');
         const resetBtn = document.getElementById('btnReset');
@@ -119,7 +148,6 @@
 
         let selection = null; // selected device id
         let connectMode = false;
-        let disconnectMode = false;
         let firstForConnect = null;
 
         function updateStatus(msg) { statusEl.textContent = msg; }
@@ -143,6 +171,31 @@
             }
         }
 
+        function updateComponentSelect() {
+            componentSelect.innerHTML = '<option value="">-- Select a component --</option>';
+            
+            // Add devices to the select
+            for (const [id, device] of devices) {
+                const option = document.createElement('option');
+                option.value = id;
+                option.textContent = `${device.label} (${device.type})`;
+                componentSelect.appendChild(option);
+            }
+            
+            // Add connections to the select
+            for (const key of edges) {
+                const [a, b] = key.split('|');
+                const deviceA = devices.get(a);
+                const deviceB = devices.get(b);
+                if (deviceA && deviceB) {
+                    const option = document.createElement('option');
+                    option.value = key;
+                    option.textContent = `${deviceA.label} ↔ ${deviceB.label} (Connection)`;
+                    componentSelect.appendChild(option);
+                }
+            }
+        }
+
         function log(message, isError = false) {
             if (logEl.children.length === 1 && logEl.firstElementChild.classList.contains('text-muted')) {
                 logEl.innerHTML = '';
@@ -155,29 +208,39 @@
             logEl.scrollTop = logEl.scrollHeight;
         }
 
-        function createDevice(type) {
-            const idNum = deviceCounters[type]++;
+        function createDevice(type, x, y, idNum = null, label = null) {
+            // Calculate the next available ID for this device type
+            if (idNum === null) {
+                idNum = deviceCounters[type]++;
+            } else {
+                // If we're creating a device with a specific ID, update the counter if needed
+                deviceCounters[type] = Math.max(deviceCounters[type], idNum + 1);
+            }
+            
             const id = `${type[0].toLowerCase()}${idNum}`;
-            const label = (type === 'Switch' ? 'SW' : type === 'Router' ? 'R' : 'PC') + idNum;
+            const deviceLabel = label || (type === 'Switch' ? 'SW' : type === 'Router' ? 'R' : 'PC') + idNum;
 
             const el = document.createElement('div');
             el.className = 'device';
             el.dataset.id = id;
             el.dataset.type = type;
-            el.innerHTML = `<i class="bi bi-${DEVICE_ICON[type]}"></i><div class="label">${label}</div>`;
+            el.innerHTML = `<i class="bi bi-${DEVICE_ICON[type]}"></i><div class="label">${deviceLabel}</div>`;
 
-            const x = 40 + Math.random() * (workspace.clientWidth - 120);
-            const y = 40 + Math.random() * (workspace.clientHeight - 120);
+            if (x === undefined || y === undefined) {
+                x = 40 + Math.random() * (workspace.clientWidth - 120);
+                y = 40 + Math.random() * (workspace.clientHeight - 120);
+            }
             positionDeviceEl(el, x, y);
 
             workspace.appendChild(el);
-            devices.set(id, { id, type, label, x, y, el });
-            addToSelects(id, label);
+            devices.set(id, { id, type, label: deviceLabel, x, y, el });
+            addToSelects(id, deviceLabel);
+            updateComponentSelect();
 
             makeDraggable(el);
             el.addEventListener('click', onDeviceClick);
 
-            updateStatus(`${type} ${label} added`);
+            updateStatus(`${type} ${deviceLabel} added`);
             return id;
         }
 
@@ -208,15 +271,12 @@
                 line.setAttribute('y2', cb.y);
                 line.setAttribute('class', 'wire');
                 line.dataset.a = a; line.dataset.b = b;
-                if (disconnectMode) line.style.cursor = 'pointer';
-                line.addEventListener('click', onWireClick);
                 wires.appendChild(line);
             }
         }
 
         function onDeviceClick(e) {
             const id = e.currentTarget.dataset.id;
-            if (disconnectMode) return; // ignore
             if (connectMode) {
                 if (!firstForConnect) {
                     firstForConnect = id;
@@ -239,6 +299,7 @@
                     if (!edges.has(key)) {
                         edges.add(key);
                         redrawWires();
+                        updateComponentSelect();
                         updateStatus(`Connected ${da.label} ↔ ${db.label}`);
                     } else {
                         updateStatus('These devices are already connected');
@@ -252,18 +313,9 @@
             selection = id;
             devices.get(id).el.classList.toggle('selected');
             if (!devices.get(id).el.classList.contains('selected')) selection = null;
-        }
-
-        function onWireClick(e) {
-            if (!disconnectMode) return;
-            const a = e.target.dataset.a, b = e.target.dataset.b;
-            const key = deviceKey(a,b);
-            if (edges.delete(key)) {
-                redrawWires();
-                updateStatus('Connection removed');
-            }
-            disconnectMode = false;
-            disconnectBtn.classList.remove('active');
+            
+            // Update the component select to match
+            componentSelect.value = id;
         }
 
         function makeDraggable(el) {
@@ -293,20 +345,74 @@
             el.addEventListener('mousedown', onDown);
         }
 
-        function deleteSelectedDevice() {
-            if (!selection) { updateStatus('Select a device to remove'); return; }
-            const id = selection;
-            const d = devices.get(id);
-            d.el.remove();
-            devices.delete(id);
-            // remove edges tied to id
-            const toRemove = [];
-            for (const key of edges) { const [a,b] = key.split('|'); if (a === id || b === id) toRemove.push(key); }
-            toRemove.forEach(k => edges.delete(k));
-            redrawWires();
-            removeFromSelects(id);
-            selection = null;
-            updateStatus('Device removed');
+        function deleteSelectedComponent() {
+            const selectedValue = componentSelect.value;
+            if (!selectedValue) {
+                updateStatus('Please select a component from the dropdown first');
+                return;
+            }
+            
+            // Check if it's a connection (contains '|')
+            if (selectedValue.includes('|')) {
+                // It's a connection
+                if (edges.delete(selectedValue)) {
+                    redrawWires();
+                    updateComponentSelect();
+                    updateStatus('Connection removed');
+                }
+            } else {
+                // It's a device
+                const id = selectedValue;
+                const d = devices.get(id);
+                if (d) {
+                    d.el.remove();
+                    devices.delete(id);
+                    // remove edges tied to id
+                    const toRemove = [];
+                    for (const key of edges) { const [a,b] = key.split('|'); if (a === id || b === id) toRemove.push(key); }
+                    toRemove.forEach(k => edges.delete(k));
+                    redrawWires();
+                    removeFromSelects(id);
+                    updateComponentSelect();
+                    if (selection === id) selection = null;
+                    updateStatus('Device removed');
+                }
+            }
+        }
+
+        function selectComponentFromDropdown() {
+            const selectedValue = componentSelect.value;
+            if (!selectedValue) {
+                // Deselect everything
+                if (selection) {
+                    devices.get(selection).el.classList.remove('selected');
+                    selection = null;
+                }
+                return;
+            }
+            
+            // Check if it's a connection (contains '|')
+            if (selectedValue.includes('|')) {
+                // It's a connection - we can't select it visually, just inform the user
+                const [a, b] = selectedValue.split('|');
+                const deviceA = devices.get(a);
+                const deviceB = devices.get(b);
+                if (deviceA && deviceB) {
+                    updateStatus(`Selected connection: ${deviceA.label} ↔ ${deviceB.label}`);
+                }
+                // Deselect any device
+                if (selection) {
+                    devices.get(selection).el.classList.remove('selected');
+                    selection = null;
+                }
+            } else {
+                // It's a device
+                const id = selectedValue;
+                if (selection && selection !== id) devices.get(selection).el.classList.remove('selected');
+                selection = id;
+                devices.get(id).el.classList.add('selected');
+                updateStatus(`Selected device: ${devices.get(id).label}`);
+            }
         }
 
         function clearAll() {
@@ -319,9 +425,9 @@
             receiverSel.innerHTML = '';
             deviceCounters = { Router: 1, Switch: 1, PC: 1 };
             logEl.innerHTML = '<div class="text-muted">No messages yet.</div>';
-            selection = null; connectMode = false; disconnectMode = false; firstForConnect = null;
+            selection = null; connectMode = false; firstForConnect = null;
             connectBtn.classList.remove('active');
-            disconnectBtn.classList.remove('active');
+            updateComponentSelect();
             updateStatus('Cleared.');
         }
 
@@ -405,13 +511,100 @@
             });
         }
 
+        // Create predefined hybrid topology
+        function createPredefinedTopology() {
+            // Clear any existing topology
+            workspace.innerHTML = '';
+            wires.innerHTML = '';
+            devices.clear();
+            edges.clear();
+            senderSel.innerHTML = '';
+            receiverSel.innerHTML = '';
+            deviceCounters = { Router: 1, Switch: 1, PC: 1 };
+            
+            // Create a complex hybrid topology combining star, bus, ring, and mesh topologies
+            
+            const router1 = createDevice('Router', 475, 100, 1, 'R1');
+
+            const switch1 = createDevice('Switch', 100, 100, 1, 'SW1');
+            const switch2 = createDevice('Switch', 250, 100, 2, 'SW2');
+            const switch3 = createDevice('Switch', 700, 100, 3, 'SW3');
+            const switch4 = createDevice('Switch', 850, 100, 4, 'SW4');
+            const switch5 = createDevice('Switch', 250, 250, 5, 'SW5');
+            const switch6 = createDevice('Switch', 150, 350, 6, 'SW6');
+            const switch7 = createDevice('Switch', 350, 350, 7, 'SW7');
+            const switch8 = createDevice('Switch', 250, 450, 8, 'SW8');
+            const switch9 = createDevice('Switch', 750, 250, 9, 'SW9');
+            const switch10 = createDevice('Switch', 650, 350, 10, 'SW10');
+            const switch11 = createDevice('Switch', 850, 350, 11, 'SW11');
+            const switch12 = createDevice('Switch', 750, 450, 12, 'SW12');
+
+            const pc1 = createDevice('PC', 100, 0, 1, 'PC1');
+            const pc2 = createDevice('PC', 250, 0, 2, 'PC2');
+            const pc3 = createDevice('PC', 700, 0, 3, 'PC3');
+            const pc4 = createDevice('PC', 850, 0, 4, 'PC4');
+            const pc5 = createDevice('PC', 975, 100, 5, 'PC5');
+            const pc6 = createDevice('PC', 850, 200, 6, 'PC6');
+            const pc7 = createDevice('PC', 25, 350, 7, 'PC7');
+            const pc8 = createDevice('PC', 250, 540, 8, 'PC8');
+            const pc9 = createDevice('PC', 450, 350, 9, 'PC9');
+            const pc10 = createDevice('PC', 550, 350, 10, 'PC10');
+            const pc11 = createDevice('PC', 750, 540, 11, 'PC11');
+            const pc12 = createDevice('PC', 950, 350, 12, 'PC12');
+
+            edges.add(deviceKey(router1, switch2));
+            edges.add(deviceKey(router1, switch3));
+            edges.add(deviceKey(router1, switch5));
+            edges.add(deviceKey(router1, switch9));
+            edges.add(deviceKey(switch1, switch2));
+            edges.add(deviceKey(switch3, switch4));
+            edges.add(deviceKey(switch5, switch6));
+            edges.add(deviceKey(switch6, switch8));
+            edges.add(deviceKey(switch8, switch7));
+            edges.add(deviceKey(switch7, switch5));
+            edges.add(deviceKey(switch9, switch10));
+            edges.add(deviceKey(switch9, switch11));
+            edges.add(deviceKey(switch9, switch12));
+            edges.add(deviceKey(switch10, switch12));
+            edges.add(deviceKey(switch10, switch11));
+            edges.add(deviceKey(switch11, switch12));
+
+            edges.add(deviceKey(pc1, switch1));
+            edges.add(deviceKey(pc2, switch2));
+            edges.add(deviceKey(pc3, switch3));
+            edges.add(deviceKey(pc4, switch4));
+            edges.add(deviceKey(pc5, switch4));
+            edges.add(deviceKey(pc6, switch4));
+            edges.add(deviceKey(pc7, switch6));
+            edges.add(deviceKey(pc8, switch8));
+            edges.add(deviceKey(pc9, switch7));
+            edges.add(deviceKey(pc10, switch10));
+            edges.add(deviceKey(pc11, switch12));
+            edges.add(deviceKey(pc12, switch11));
+
+            
+            redrawWires();
+            updateComponentSelect();
+            updateStatus('Complex hybrid topology loaded');
+            
+            // Update device counters to continue from the highest used numbers
+            deviceCounters.Router = 2; 
+            deviceCounters.Switch = 13; 
+            deviceCounters.PC = 13; 
+        }
+
         // Event bindings
         addRouterBtn.addEventListener('click', () => createDevice('Router'));
         addSwitchBtn.addEventListener('click', () => createDevice('Switch'));
         addPCBtn.addEventListener('click', () => createDevice('PC'));
-        connectBtn.addEventListener('click', () => { connectMode = true; disconnectMode = false; firstForConnect = null; connectBtn.classList.add('active'); disconnectBtn.classList.remove('active'); updateStatus('Connect: choose first device'); });
-        disconnectBtn.addEventListener('click', () => { disconnectMode = true; connectMode = false; firstForConnect = null; disconnectBtn.classList.add('active'); connectBtn.classList.remove('active'); updateStatus('Remove Link: click a connection'); });
-        deleteDeviceBtn.addEventListener('click', deleteSelectedDevice);
+        connectBtn.addEventListener('click', () => { 
+            connectMode = true; 
+            firstForConnect = null; 
+            connectBtn.classList.add('active'); 
+            updateStatus('Connect: choose first device'); 
+        });
+        componentSelect.addEventListener('change', selectComponentFromDropdown);
+        deleteSelectedComponentBtn.addEventListener('click', deleteSelectedComponent);
         sendBtn.addEventListener('click', sendMessage);
         clearBtn.addEventListener('click', clearAll);
         resetBtn.addEventListener('click', resetSimulation);
@@ -420,7 +613,9 @@
         const ro = new ResizeObserver(() => redrawWires());
         ro.observe(document.querySelector('.workspace-wrapper'));
 
-        updateStatus('Ready. Add devices to begin.');
+        // Initialize with predefined topology
+        window.addEventListener('load', createPredefinedTopology);
+        updateStatus('Ready. Complex hybrid topology loaded.');
     </script>
 </body>
 </html>
